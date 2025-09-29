@@ -1,0 +1,7 @@
+build/
+old/
+libmicroros/
+.vscode/
+Pico-10dof-imu_code/
+pico-10dof-imu/
+Pico-10dof-imu_code.zip
