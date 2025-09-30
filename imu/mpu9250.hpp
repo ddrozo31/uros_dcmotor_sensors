@@ -7,7 +7,7 @@
 
 class MPU9250 {
 public:
-    MPU9250(i2c_inst_t* i2c, uint8_t address = 0x68);
+    MPU9250(i2c_inst_t* i2c, uint sda_pin = 12, uint scl_pin = 13, uint8_t address = 0x68);
 
     bool init();
     bool read_accel_gyro();

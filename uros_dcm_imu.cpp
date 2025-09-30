@@ -21,6 +21,7 @@
 #include <std_msgs/msg/float32.h>
 
 #include "imu/mpu9250.hpp"
+#include "imu/madgwick_filter.hpp"
 #include <sensor_msgs/msg/imu.h>
 
 
@@ -202,7 +203,10 @@ std::map<uint, Motor*> Motor::motor_map;
 // Motor(uint led_pin = 25, uint ena_pin = 11, uint in1_pin = 13, uint in2_pin = 12, uint enc_a_pin = 26, uint enc_b_pin = 27, int ticks_per_rev = 64, float gear_ratio = 50.0f, float kp = 0.1158f, float ki = 0.4634f, float kd = 0.0f)
 
 Motor motor1(25, 8, 9, 11, 18, 19, 64, 50.0f, 0.1f, 0.1f, 0.01f);     // (25, 11, 13, 12, 26, 27, 64, 50.0f, 0.1f, 0.1f, 0.01f);
-MPU9250 imu(i2c0);
+
+MPU9250 imu(i2c0,12,13);
+MadgwickFilter filter;
+
 rcl_publisher_t imu_pub;
 sensor_msgs__msg__Imu imu_msg;
 
@@ -237,6 +241,44 @@ void cmd_callback(const void * msgin) {
 
 }
 
+void imu_callback() {
+    static absolute_time_t last_time = get_absolute_time();
+    absolute_time_t now = get_absolute_time();
+    float dt = to_ms_since_boot(now) - to_ms_since_boot(last_time);
+    dt /= 1000.0f;
+    last_time = now;
+
+    if (!imu.read_accel_gyro()) return;
+
+    // Update filter
+    filter.update(imu.gx, imu.gy, imu.gz, imu.ax, imu.ay, imu.az, dt);
+
+    // Fill IMU message
+    imu_msg.linear_acceleration.x = imu.ax;
+    imu_msg.linear_acceleration.y = imu.ay;
+    imu_msg.linear_acceleration.z = imu.az;
+
+    imu_msg.angular_velocity.x = imu.gx;
+    imu_msg.angular_velocity.y = imu.gy;
+    imu_msg.angular_velocity.z = imu.gz;
+
+    float x, y, z, w;
+    filter.getQuaternion(x, y, z, w);
+
+    imu_msg.orientation.x = x;
+    imu_msg.orientation.y = y;
+    imu_msg.orientation.z = z;
+    imu_msg.orientation.w = w;
+
+    // Optional: set covariance or frame_id
+    imu_msg.orientation_covariance[0] = 0.02;
+    imu_msg.orientation_covariance[4] = 0.02;
+    imu_msg.orientation_covariance[8] = 0.02;
+
+    rcl_publish(&imu_pub, &imu_msg, NULL);
+}
+
+
 // Timer callback to calculate and publish RPM
 void debug_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
 
@@ -266,19 +308,7 @@ void debug_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
 
     rcl_ret_t ret2 = rcl_publish(&debug_pub, &debug_msg, NULL);
 
-   if (!imu.read_accel_gyro()) return;
-
-    imu_msg.linear_acceleration.x = imu.ax;
-    imu_msg.linear_acceleration.y = imu.ay;
-    imu_msg.linear_acceleration.z = imu.az;
-
-    imu_msg.angular_velocity.x = imu.gx;
-    imu_msg.angular_velocity.y = imu.gy;
-    imu_msg.angular_velocity.z = imu.gz;
-
-    imu_msg.orientation_covariance[0] = -1;  // mark orientation as unknown
-
-    rcl_publish(&imu_pub, &imu_msg, NULL);
+    imu_callback();
     
 }
 
@@ -357,11 +387,7 @@ int main() {
     motor1.toggleLED();
 
     // Initialize I2C for MPU9250
-    i2c_init(i2c0, 400 * 1000);
-    gpio_set_function(12, GPIO_FUNC_I2C); // SDA
-    gpio_set_function(13, GPIO_FUNC_I2C); // SCL
-    gpio_pull_up(12);
-    gpio_pull_up(13);
+
 
     imu.init();
 

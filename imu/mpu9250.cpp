@@ -6,8 +6,16 @@
 #define MPU_PWR_MGMT_1   0x6B
 #define MPU_ACCEL_XOUT_H 0x3B
 
-MPU9250::MPU9250(i2c_inst_t* i2c, uint8_t address)
-    : i2c_inst(i2c), dev_addr(address), ax(0), ay(0), az(0), gx(0), gy(0), gz(0) {}
+MPU9250::MPU9250(i2c_inst_t* i2c, uint sda_pin, uint scl_pin, uint8_t address)
+    : i2c_inst(i2c), dev_addr(address), ax(0), ay(0), az(0), gx(0), gy(0), gz(0) {
+
+    i2c_init(i2c, 400 * 1000);
+    gpio_set_function(sda_pin, GPIO_FUNC_I2C); // SDA
+    gpio_set_function(scl_pin, GPIO_FUNC_I2C); // SCL
+    gpio_pull_up(sda_pin);
+    gpio_pull_up(scl_pin);
+
+    }
 
 bool MPU9250::init() {
     // Wake up the MPU9250

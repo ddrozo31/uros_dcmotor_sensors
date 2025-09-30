@@ -15,6 +15,7 @@ add_executable(${PROJECT_NAME}
     uros_dcm_imu.cpp
     pico_uart_transport.c
     imu/mpu9250.cpp
+    imu/madgwick_filter.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} 
