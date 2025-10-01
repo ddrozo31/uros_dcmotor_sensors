@@ -16,6 +16,7 @@ add_executable(${PROJECT_NAME}
     pico_uart_transport.c
     imu/mpu9250.cpp
     imu/madgwick_filter.cpp
+    imu/ultrasonic_sensor.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} 

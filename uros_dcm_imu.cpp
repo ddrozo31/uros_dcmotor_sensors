@@ -22,8 +22,14 @@
 
 #include "imu/mpu9250.hpp"
 #include "imu/madgwick_filter.hpp"
+#include "imu/ultrasonic_sensor.hpp"
+
+
+#include <sensor_msgs/msg/range.h>
 #include <sensor_msgs/msg/imu.h>
 
+#include <rosidl_runtime_c/string_functions.h>
+#include <rmw_microros/time_sync.h>
 
 
 
@@ -210,6 +216,12 @@ MadgwickFilter filter;
 rcl_publisher_t imu_pub;
 sensor_msgs__msg__Imu imu_msg;
 
+
+UltrasonicSensor range_sensor(16, 17); // Trig pin 16, Echo pin 17
+sensor_msgs__msg__Range range_msg;
+rcl_publisher_t range_pub;
+
+
 float sp = 0.0f; // position set-point Motor
 float kp = 0.0f;
 float ki = 0.0f;
@@ -253,6 +265,15 @@ void imu_callback() {
     // Update filter
     filter.update(imu.gx, imu.gy, imu.gz, imu.ax, imu.ay, imu.az, dt);
 
+    int64_t epoch_ms = rmw_uros_epoch_millis();
+    imu_msg.header.stamp.sec = epoch_ms / 1000;
+    imu_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
+
+    imu_msg.header.frame_id.capacity = 20;
+    imu_msg.header.frame_id.size = 9;
+    // Before publishing
+    rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "base_link");
+
     // Fill IMU message
     imu_msg.linear_acceleration.x = imu.ax;
     imu_msg.linear_acceleration.y = imu.ay;
@@ -276,6 +297,29 @@ void imu_callback() {
     imu_msg.orientation_covariance[8] = 0.02;
 
     rcl_publish(&imu_pub, &imu_msg, NULL);
+}
+
+void range_callback() {
+    float distance;
+
+    if (!range_sensor.measure_distance(distance)) return;
+
+    int64_t epoch_ms = rmw_uros_epoch_millis();
+    range_msg.header.stamp.sec = epoch_ms / 1000;
+    range_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
+
+
+    range_msg.range = distance;
+    range_msg.min_range = 0.02;
+    range_msg.max_range = 4.0;
+    range_msg.field_of_view = 0.5;  // radians, adjust as needed
+    range_msg.radiation_type = sensor_msgs__msg__Range__ULTRASOUND;
+    range_msg.header.frame_id.capacity = 20;
+    range_msg.header.frame_id.size = 9;
+    // Before publishing
+    rosidl_runtime_c__String__assign(&range_msg.header.frame_id, "base_link");
+
+    rcl_publish(&range_pub, &range_msg, NULL);
 }
 
 
@@ -309,6 +353,8 @@ void debug_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
     rcl_ret_t ret2 = rcl_publish(&debug_pub, &debug_msg, NULL);
 
     imu_callback();
+
+    range_callback();
     
 }
 
@@ -339,6 +385,7 @@ int main() {
         return ret;
     }
 
+
     // Initialize support and node
     rclc_support_init(&support, 0, NULL, &allocator);
     rclc_node_init_default(&node, "pico_node", "", &support);
@@ -357,6 +404,13 @@ int main() {
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
         "imu"
+    );
+
+    rclc_publisher_init_default(
+        &range_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range),
+        "ultrasonic"
     );
 
     // Initialize the timer for RPM (100ms interval)
