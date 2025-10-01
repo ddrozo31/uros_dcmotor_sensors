@@ -9,8 +9,6 @@
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
 
-#include "icm20948.h"
-#include "lps22hb.h"
 
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -22,58 +20,17 @@
 #include <std_msgs/msg/int32.h>
 #include <std_msgs/msg/float32.h>
 
+#include "imu/mpu9250.hpp"
+#include "imu/madgwick_filter.hpp"
+#include "imu/ultrasonic_sensor.hpp"
 
 
-class IMU{
-public:
-    IMU()
-    {
-        enMotionSensorType = IMU_EN_SENSOR_TYPE_NULL;
-        imuInit(&enMotionSensorType);
+#include <sensor_msgs/msg/range.h>
+#include <sensor_msgs/msg/imu.h>
 
-    }
+#include <rosidl_runtime_c/string_functions.h>
+#include <rmw_microros/time_sync.h>
 
-    void read_data()
-    {
-        
-        if((I2C_readByte(LPS_STATUS)&0x02)==0x02)   // a new pressure data is generated
-        {
-            u8Buf[0]=I2C_readByte(LPS_TEMP_OUT_L);
-            u8Buf[1]=I2C_readByte(LPS_TEMP_OUT_H);
-            TEMP_DATA=(float)((u8Buf[1]<<8)+u8Buf[0])/100.0f;
-        }
-        
-		imuDataGet( &stAngles, &stGyroRawData, &stAccelRawData, &stMagnRawData);
-    }
-    IMU_ST_ANGLES_DATA get_stAngles()
-    {
-        return stAngles;
-    }
-    IMU_ST_SENSOR_DATA get_stGyroRawData()
-    {
-        return stGyroRawData;
-    }
-    IMU_ST_SENSOR_DATA get_stAccelRawData()
-    {
-        return stAccelRawData;
-    }
-    IMU_ST_SENSOR_DATA get_stMagnRawData()
-    {
-        return stMagnRawData;
-    }
-
-private:
-    IMU_EN_SENSOR_TYPE enMotionSensorType;
-    IMU_ST_ANGLES_DATA stAngles;
-    IMU_ST_SENSOR_DATA stGyroRawData;
-    IMU_ST_SENSOR_DATA stAccelRawData;
-    IMU_ST_SENSOR_DATA stMagnRawData;
-    float PRESS_DATA=0;
-    float TEMP_DATA=0;
-    uint8_t u8Buf[3];
-
-
-};
 
 
 
@@ -210,17 +167,7 @@ public:
 
     void pos_control(float sp, float pos, float* error, float* cmd)
     {
-        float e = (sp - pos);
-        integral += e * dt;
-        float u = Kp * e + Ki * integral + Kd * (e - previous_error) / dt;
 
-        u = map(u, -1.0f, 1.0f, -100.0f, 100.0f);
-
-        if (u > 100.0f) u = 100.0f;
-        if (u < -100.0f) u = -100.0f;
-
-        *cmd = u;
-        *error = e;
     }
 
     void set_pid(float kp, float ki, float kd) {
@@ -252,7 +199,17 @@ std::map<uint, Motor*> Motor::motor_map;
 // Motor(uint led_pin = 25, uint ena_pin = 11, uint in1_pin = 13, uint in2_pin = 12, uint enc_a_pin = 26, uint enc_b_pin = 27, int ticks_per_rev = 64, float gear_ratio = 50.0f, float kp = 0.1158f, float ki = 0.4634f, float kd = 0.0f)
 
 Motor motor1(25, 8, 9, 11, 18, 19, 64, 50.0f, 0.1f, 0.1f, 0.01f);     // (25, 11, 13, 12, 26, 27, 64, 50.0f, 0.1f, 0.1f, 0.01f);
-IMU imu1;
+
+MPU9250 imu(i2c0,12,13);
+MadgwickFilter filter;
+
+rcl_publisher_t imu_pub;
+sensor_msgs__msg__Imu imu_msg;
+
+
+UltrasonicSensor range_sensor(16, 17); // Trig pin 16, Echo pin 17
+sensor_msgs__msg__Range range_msg;
+rcl_publisher_t range_pub;
 
 
 float sp = 0.0f; // position set-point Motor
@@ -286,6 +243,76 @@ void cmd_callback(const void * msgin) {
 
 }
 
+void imu_callback() {
+    static absolute_time_t last_time = get_absolute_time();
+    absolute_time_t now = get_absolute_time();
+    float dt = to_ms_since_boot(now) - to_ms_since_boot(last_time);
+    dt /= 1000.0f;
+    last_time = now;
+
+    if (!imu.read_accel_gyro()) return;
+
+    // Update filter
+    filter.update(imu.gx, imu.gy, imu.gz, imu.ax, imu.ay, imu.az, dt);
+
+    int64_t epoch_ms = rmw_uros_epoch_millis();
+    imu_msg.header.stamp.sec = epoch_ms / 1000;
+    imu_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
+
+    imu_msg.header.frame_id.capacity = 20;
+    imu_msg.header.frame_id.size = 9;
+    // Before publishing
+    rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "base_link");
+
+    // Fill IMU message
+    imu_msg.linear_acceleration.x = imu.ax;
+    imu_msg.linear_acceleration.y = imu.ay;
+    imu_msg.linear_acceleration.z = imu.az;
+
+    imu_msg.angular_velocity.x = imu.gx;
+    imu_msg.angular_velocity.y = imu.gy;
+    imu_msg.angular_velocity.z = imu.gz;
+
+    float x, y, z, w;
+    filter.getQuaternion(x, y, z, w);
+
+    imu_msg.orientation.x = x;
+    imu_msg.orientation.y = y;
+    imu_msg.orientation.z = z;
+    imu_msg.orientation.w = w;
+
+    // Optional: set covariance or frame_id
+    imu_msg.orientation_covariance[0] = 0.02;
+    imu_msg.orientation_covariance[4] = 0.02;
+    imu_msg.orientation_covariance[8] = 0.02;
+
+    rcl_publish(&imu_pub, &imu_msg, NULL);
+}
+
+void range_callback() {
+    float distance;
+
+    if (!range_sensor.measure_distance(distance)) return;
+
+    int64_t epoch_ms = rmw_uros_epoch_millis();
+    range_msg.header.stamp.sec = epoch_ms / 1000;
+    range_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
+
+
+    range_msg.range = distance;
+    range_msg.min_range = 0.02;
+    range_msg.max_range = 4.0;
+    range_msg.field_of_view = 0.5;  // radians, adjust as needed
+    range_msg.radiation_type = sensor_msgs__msg__Range__ULTRASOUND;
+    range_msg.header.frame_id.capacity = 20;
+    range_msg.header.frame_id.size = 9;
+    // Before publishing
+    rosidl_runtime_c__String__assign(&range_msg.header.frame_id, "base_link");
+
+    rcl_publish(&range_pub, &range_msg, NULL);
+}
+
+
 // Timer callback to calculate and publish RPM
 void debug_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
 
@@ -299,27 +326,25 @@ void debug_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
 
     motor1.set_pid(kp, 0.0f, 0.0f);
 
-    motor1.pos_control(sp, position1, &error, &cmd);
+    // motor1.pos_control(sp, position1, &error, &cmd);
 
     // Apply the control signal to the motor 1
-    motor1.set_motor(cmd);
-
-    imu1.read_data();
-
-    IMU_ST_ANGLES_DATA Angles = imu1.get_stAngles(); //stAngles.fRoll, stAngles.fPitch, stAngles.fYaw
+    motor1.set_motor(sp);
 
     // Publish the debug message
     debug_msg.linear.x = position1;
-    debug_msg.linear.y = cmd;
+    debug_msg.linear.y = sp;
 	debug_msg.linear.z = error;
 
-    debug_msg.angular.x = Angles.fRoll;
-    debug_msg.angular.y = Angles.fPitch;
-    debug_msg.angular.z = Angles.fYaw;
+    //debug_msg.angular.x = Angles.fRoll;
+    //debug_msg.angular.y = Angles.fPitch;
+    //debug_msg.angular.z = Angles.fYaw;
 
     rcl_ret_t ret2 = rcl_publish(&debug_pub, &debug_msg, NULL);
 
-   
+    imu_callback();
+
+    range_callback();
     
 }
 
@@ -350,6 +375,7 @@ int main() {
         return ret;
     }
 
+
     // Initialize support and node
     rclc_support_init(&support, 0, NULL, &allocator);
     rclc_node_init_default(&node, "pico_node", "", &support);
@@ -361,6 +387,20 @@ int main() {
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
         "debug_pub"
+    );
+
+    rclc_publisher_init_default( 
+        &imu_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+        "imu"
+    );
+
+    rclc_publisher_init_default(
+        &range_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range),
+        "ultrasonic"
     );
 
     // Initialize the timer for RPM (100ms interval)
@@ -389,6 +429,11 @@ int main() {
     rclc_executor_add_timer(&executor, &debug_timer);
 
     motor1.toggleLED();
+
+    // Initialize I2C for MPU9250
+
+
+    imu.init();
 
     while (true) {
 
