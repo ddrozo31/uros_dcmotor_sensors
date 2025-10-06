@@ -17,6 +17,7 @@ add_executable(${PROJECT_NAME}
     imu/mpu9250.cpp
     imu/madgwick_filter.cpp
     imu/ultrasonic_sensor.cpp
+    imu/bmi160.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} 
@@ -25,6 +26,7 @@ target_link_libraries(${PROJECT_NAME}
     hardware_clocks
 	hardware_irq
     hardware_i2c
+    hardware_spi
     microros
 
 )

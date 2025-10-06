@@ -23,6 +23,7 @@
 #include "imu/mpu9250.hpp"
 #include "imu/madgwick_filter.hpp"
 #include "imu/ultrasonic_sensor.hpp"
+#include "imu/bmi160.hpp"
 
 
 #include <sensor_msgs/msg/range.h>
@@ -200,11 +201,19 @@ std::map<uint, Motor*> Motor::motor_map;
 
 Motor motor1(25, 8, 9, 11, 18, 19, 64, 50.0f, 0.1f, 0.1f, 0.01f);     // (25, 11, 13, 12, 26, 27, 64, 50.0f, 0.1f, 0.1f, 0.01f);
 
-MPU9250 imu(i2c0,12,13);
-MadgwickFilter filter;
 
-rcl_publisher_t imu_pub;
-sensor_msgs__msg__Imu imu_msg;
+
+// Create IMU and filter objects
+// MPU9250 imu_mpu9250(i2c0,12,13);
+MadgwickFilter filter;
+// or
+
+BMI160 imu_bmi160; 
+
+
+
+rcl_publisher_t imu_bmi160_pub;
+sensor_msgs__msg__Imu imu_bmi160_msg;
 
 
 UltrasonicSensor range_sensor(16, 17); // Trig pin 16, Echo pin 17
@@ -243,51 +252,109 @@ void cmd_callback(const void * msgin) {
 
 }
 
-void imu_callback() {
+
+    // void imu_mpu9250_callback() {
+    //     static absolute_time_t last_time = get_absolute_time();
+    //     absolute_time_t now = get_absolute_time();
+    //     float dt = to_ms_since_boot(now) - to_ms_since_boot(last_time);
+    //     dt /= 1000.0f;
+    //     last_time = now;
+
+    //     if (!imu.read_accel_gyro()) return;
+
+    //     // Update filter
+    //     filter.update(imu.gx, imu.gy, imu.gz, imu.ax, imu.ay, imu.az, dt);
+
+    //     int64_t epoch_ms = rmw_uros_epoch_millis();
+    //     imu_msg.header.stamp.sec = epoch_ms / 1000;
+    //     imu_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
+
+    //     imu_msg.header.frame_id.capacity = 20;
+    //     imu_msg.header.frame_id.size = 9;
+    //     // Before publishing
+    //     rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "base_link");
+
+    //     // Fill IMU message
+    //     imu_msg.linear_acceleration.x = imu.ax;
+    //     imu_msg.linear_acceleration.y = imu.ay;
+    //     imu_msg.linear_acceleration.z = imu.az;
+
+    //     imu_msg.angular_velocity.x = imu.gx;
+    //     imu_msg.angular_velocity.y = imu.gy;
+    //     imu_msg.angular_velocity.z = imu.gz;
+
+    //     float x, y, z, w;
+    //     filter.getQuaternion(x, y, z, w);
+
+    //     imu_msg.orientation.x = x;
+    //     imu_msg.orientation.y = y;
+    //     imu_msg.orientation.z = z;
+    //     imu_msg.orientation.w = w;
+
+    //     // Optional: set covariance or frame_id
+    //     imu_msg.orientation_covariance[0] = 0.02;
+    //     imu_msg.orientation_covariance[4] = 0.02;
+    //     imu_msg.orientation_covariance[8] = 0.02;
+
+    //     rcl_publish(&imu_pub, &imu_msg, NULL);
+
+    // }
+
+
+void imu_bmi160_callback() {
     static absolute_time_t last_time = get_absolute_time();
     absolute_time_t now = get_absolute_time();
     float dt = to_ms_since_boot(now) - to_ms_since_boot(last_time);
     dt /= 1000.0f;
     last_time = now;
 
-    if (!imu.read_accel_gyro()) return;
+    if (!imu_bmi160.begin(BMI160::I2C_MODE, i2c0, 12, 13, 0x68))// I2C mode, i2c0, SDA=12, SCL=13, address=0x68
+    {
+        return;
+    }
+
+    if (!imu_bmi160.read_accel_gyro()) return;
+
 
     // Update filter
-    filter.update(imu.gx, imu.gy, imu.gz, imu.ax, imu.ay, imu.az, dt);
+    filter.update(imu_bmi160.gx,imu_bmi160.gy, imu_bmi160.gz, imu_bmi160.ax, imu_bmi160.ay, imu_bmi160.az, dt);
 
     int64_t epoch_ms = rmw_uros_epoch_millis();
-    imu_msg.header.stamp.sec = epoch_ms / 1000;
-    imu_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
+    imu_bmi160_msg.header.stamp.sec = epoch_ms / 1000;
+    imu_bmi160_msg.header.stamp.nanosec = (epoch_ms % 1000) * 1000000;
 
-    imu_msg.header.frame_id.capacity = 20;
-    imu_msg.header.frame_id.size = 9;
+    imu_bmi160_msg.header.frame_id.capacity = 20;
+    imu_bmi160_msg.header.frame_id.size = 9;
     // Before publishing
-    rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "base_link");
+    rosidl_runtime_c__String__assign(&imu_bmi160_msg.header.frame_id, "base_link");
 
     // Fill IMU message
-    imu_msg.linear_acceleration.x = imu.ax;
-    imu_msg.linear_acceleration.y = imu.ay;
-    imu_msg.linear_acceleration.z = imu.az;
+    imu_bmi160_msg.linear_acceleration.x = imu_bmi160.ax;
+    imu_bmi160_msg.linear_acceleration.y = imu_bmi160.ay;
+    imu_bmi160_msg.linear_acceleration.z = imu_bmi160.az;
 
-    imu_msg.angular_velocity.x = imu.gx;
-    imu_msg.angular_velocity.y = imu.gy;
-    imu_msg.angular_velocity.z = imu.gz;
+    imu_bmi160_msg.angular_velocity.x = imu_bmi160.gx;
+    imu_bmi160_msg.angular_velocity.y = imu_bmi160.gy;
+    imu_bmi160_msg.angular_velocity.z = imu_bmi160.gz;
 
     float x, y, z, w;
     filter.getQuaternion(x, y, z, w);
 
-    imu_msg.orientation.x = x;
-    imu_msg.orientation.y = y;
-    imu_msg.orientation.z = z;
-    imu_msg.orientation.w = w;
+    imu_bmi160_msg.orientation.x = x;
+    imu_bmi160_msg.orientation.y = y;
+    imu_bmi160_msg.orientation.z = z;
+    imu_bmi160_msg.orientation.w = w;
 
     // Optional: set covariance or frame_id
-    imu_msg.orientation_covariance[0] = 0.02;
-    imu_msg.orientation_covariance[4] = 0.02;
-    imu_msg.orientation_covariance[8] = 0.02;
+    imu_bmi160_msg.orientation_covariance[0] = 0.02;
+    imu_bmi160_msg.orientation_covariance[4] = 0.02;
+    imu_bmi160_msg.orientation_covariance[8] = 0.02;
 
-    rcl_publish(&imu_pub, &imu_msg, NULL);
+    // imu_bmi160_pub
+
+    rcl_publish(&imu_bmi160_pub, &imu_bmi160_msg, NULL);
 }
+
 
 void range_callback() {
     float distance;
@@ -342,7 +409,9 @@ void debug_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
 
     rcl_ret_t ret2 = rcl_publish(&debug_pub, &debug_msg, NULL);
 
-    imu_callback();
+    // imu_mpu9250_callback();
+
+    imu_bmi160_callback();
 
     range_callback();
     
@@ -390,10 +459,10 @@ int main() {
     );
 
     rclc_publisher_init_default( 
-        &imu_pub,
+        &imu_bmi160_pub,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-        "imu"
+        "imu_bmi160"
     );
 
     rclc_publisher_init_default(
@@ -432,8 +501,6 @@ int main() {
 
     // Initialize I2C for MPU9250
 
-
-    imu.init();
 
     while (true) {
 
