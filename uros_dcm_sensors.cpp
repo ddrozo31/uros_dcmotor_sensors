@@ -208,7 +208,8 @@ Motor motor1(25, 8, 9, 11, 18, 19, 64, 50.0f, 0.1f, 0.1f, 0.01f);     // (25, 11
 MadgwickFilter filter;
 // or
 
-BMI160 imu_bmi160; 
+BMI160 imu_bmi160(i2c0, 12, 13);
+
 
 
 
@@ -251,7 +252,6 @@ void cmd_callback(const void * msgin) {
     kd = (float)twist_msg_const->linear.z;
 
 }
-
 
     // void imu_mpu9250_callback() {
     //     static absolute_time_t last_time = get_absolute_time();
@@ -308,10 +308,7 @@ void imu_bmi160_callback() {
     dt /= 1000.0f;
     last_time = now;
 
-    if (!imu_bmi160.begin(BMI160::I2C_MODE, i2c0, 12, 13, 0x68))// I2C mode, i2c0, SDA=12, SCL=13, address=0x68
-    {
-        return;
-    }
+    
 
     if (!imu_bmi160.read_accel_gyro()) return;
 
@@ -354,6 +351,7 @@ void imu_bmi160_callback() {
 
     rcl_publish(&imu_bmi160_pub, &imu_bmi160_msg, NULL);
 }
+
 
 
 void range_callback() {
@@ -497,10 +495,9 @@ int main() {
 
     rclc_executor_add_timer(&executor, &debug_timer);
 
+
+    
     motor1.toggleLED();
-
-    // Initialize I2C for MPU9250
-
 
     while (true) {
 
